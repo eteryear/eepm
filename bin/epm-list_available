@@ -55,14 +55,26 @@ epm_list_available()
 
 
 case $PMTYPE in
-    apt-*)
+    apt-dpkg)
         warmup_dpkgbase
+        ;;
+    apt-rpm)
+        warmup_rpmbase
+        ;;
+esac
+
+case $PMTYPE in
+    apt-*)
         # TODO: use apt list
         if [ -n "$short" ] ; then
             docmd apt-cache search . | sed -e "s| .*||g"
         else
             docmd apt-cache search .
         fi
+        ;;
+    apm)
+        # TODO: --format json?
+        CMD="apm system list --limit 100000"
         ;;
     dnf-*)
         warmup_rpmbase
@@ -108,6 +120,9 @@ case $PMTYPE in
         ;;
     eopkg)
         CMD="eopkg list-available"
+        ;;
+    stplr)
+        CMD="stplr list"
         ;;
     pisi)
         CMD="pisi list-available"

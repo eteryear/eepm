@@ -99,6 +99,9 @@ epm_remove_names()
         apt-dpkg)
             sudocmd apt-get remove --purge $APTOPTIONS $@
             return ;;
+        apm)
+            sudocmd apm system remove $@
+            return ;;
         aptitude-dpkg)
             sudocmd aptitude purge $@
             return ;;
@@ -144,6 +147,9 @@ epm_remove_names()
             return ;;
         eopkg)
             sudocmd eopkg $(subst_option nodeps --ignore-dependency) remove $@
+            return ;;
+        stplr)
+            sudocmd stplr remove $@
             return ;;
         pisi)
             sudocmd pisi $(subst_option nodeps --ignore-dependency) remove $@
@@ -241,6 +247,9 @@ epm_remove_nonint()
             return ;;
         eopkg)
             sudocmd eopkg $(subst_option nodeps --ignore-dependency) --yes-all remove $@
+            return ;;
+        stplr)
+            sudocmd stplr remove -y $@
             return ;;
         pisi)
             sudocmd pisi $(subst_option nodeps --ignore-dependency) --yes-all remove $@

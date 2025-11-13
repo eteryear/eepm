@@ -449,6 +449,7 @@ check_for_product_update()
 }
 
 
+
 case "$1" in
     "--description")
         is_supported_arch "$2" || exit 0
@@ -464,6 +465,11 @@ esac
 # set PKGNAME to $BASEPKGNAME-$VERSION if $VERSION is found in PRODUCTALT
 [ -n "$PRODUCTALT" ] && check_alternative_pkgname
 [ -n "$PKGNAME" ] || fatal "Can't get PKGNAME"
+
+pkgtype="$(epm print info -p)"
+# deb targets always in low case
+[ "$pkgtype" = "deb" ] && PKGNAME="$(echo $PKGNAME | tr "[A-Z]" "[a-z]")"
+
 
 case "$1" in
     "--package-name")
@@ -542,6 +548,7 @@ is_repacked_packages $REPOPKGNAME || exit 0
 if [ -z "$VERSION" ] && [ -z "$force" ] && [ -z "$latest" ] ; then
     # by default use latest known version to install
     VERSION="$(get_latest_version $PKGNAME)"
+    CHECKED_VERSION="$VERSION"
 fi
 
 # default version value (can be overrided with arg $2 or by update)

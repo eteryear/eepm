@@ -34,7 +34,7 @@ SHAREDIR="$PROGDIR"
 # will replaced with /etc/eepm during install
 CONFIGDIR="$PROGDIR/../etc"
 
-export EPMVERSION="3.64.36"
+export EPMVERSION="3.64.38"
 
 # package, single (file), pipe, git
 EPMMODE="package"
@@ -3748,6 +3748,10 @@ __epm_download_alt()
         shift
     fi
 
+    if [ -z "$@" ] ; then
+        fatal "Missed package name"
+    fi
+
 
     # TODO: enable if install --download-only will works
     if tasknumber "$@" >/dev/null ; then
@@ -3775,7 +3779,7 @@ __epm_download_alt()
         for i in $(sudocmd apt-get install -y --print-uris --reinstall "$pkg" | cut -f1 -d " " | grep ".rpm'$" | sed -e "s|^'||" -e "s|'$||") ; do
             echo "$(basename "$i")" | grep -q "^$pkg" || continue
             [ -n "$print_url" ] && echo "$i" && continue
-            eget "$i"
+            docmd eget "$i"
         done
     done
     return
@@ -4254,12 +4258,12 @@ confirm_action()
     if [ "$BASEDISTRNAME" = "alt" ] ; then
         confirm_action "Do upgrade epm? [Y/n]" || full_upgrade_no_epm_update_check=1
         if [ -z "$full_upgrade_no_epm_update_check" ] ; then
-            [ -n "$quiet" ] || echo
+            [ -n "$quiet" ] || echo "Checking for new eepm package..."
             epm_version_before=$(epmq eepm &>/dev/null)
             docmd epm $dryrun install eepm &>/dev/null
             epm_version_after=$(epmq eepm &>/dev/null)
             if [ "$epm_version_before" != "$epm_version_after" ] ; then
-                info "An update for epm has been found, epm will be restarted for the update"
+                info "An update for epm has been found, restarting epm full-upgrade..."
                 exec $PROGDIR/$PROGNAME full-upgrade "$@"
                 exit 0
             fi
@@ -4276,6 +4280,7 @@ confirm_action()
     if [ -z "$full_upgrade_no_kernel_update" ] ; then
         [ -n "$quiet" ] || echo
         docmd epm $dryrun update-kernel || fatal "updating of the kernel is failed."
+        #docmd epm $dryrun remove-old-kernel || fatal "removing old kernel is failed."
     fi
 
     # disable epm play --update for non ALT Systems
@@ -4685,7 +4690,7 @@ process_package_arguments() {
     local package_groups
     declare -A package_groups
     # ONLY supported backend in short form?
-    VALID_BACKENDS="apt-rpm apt-dpkg aptitude-dpkg deepsolver-rpm urpm-rpm packagekit pkgsrc pkgng redox-pkg emerge pacman aura yum-rpm dnf-rpm snappy zypper-rpm mpkg eopkg conary npackd slackpkg homebrew opkg nix apk tce guix termux-pkg aptcyg xbps appget winget"
+    VALID_BACKENDS="apt-rpm apt-dpkg apm stplr aptitude-dpkg deepsolver-rpm urpm-rpm packagekit pkgsrc pkgng redox-pkg emerge pacman aura yum-rpm dnf-rpm snappy zypper-rpm mpkg eopkg conary npackd slackpkg homebrew opkg nix apk tce guix termux-pkg aptcyg xbps appget winget"
     for arg in "$@"; do
         pmtype=$PMTYPE
         name="$arg"
@@ -4695,6 +4700,10 @@ process_package_arguments() {
                 # FIXME
                 if echo "$arg" | grep -q "^[a-z][a-z][a-z]*:" && echo "$VALID_BACKENDS" | grep -qw "$tpmtype"; then
                     pmtype=$tpmtype
+                    # copied from distr_info
+                    if [ "$pmtype" = "dnf-rpm" ] && a= dnf --version | grep -qi "dnf5" ; then
+                        pmtype="dnf5-rpm"
+                    fi
                     name=$(echo "$arg" | cut -d: -f2)
                 fi
                 ;;
@@ -5907,7 +5916,6 @@ esac
         fi
         assure_exists update-kernel update-kernel 0.9.9
         sudocmd update-kernel $dryrun $(subst_option non_interactive -y) $force $interactive $reinstall $verbose "$@" || return
-        #docmd epm remove-old-kernels "$@" || fatal
         return ;;
     esac
 
@@ -6089,8 +6097,16 @@ epm_list_available()
 
 
 case $PMTYPE in
-    apt-*)
+    apt-dpkg)
         warmup_dpkgbase
+        ;;
+    apt-rpm)
+        warmup_rpmbase
+        ;;
+esac
+
+case $PMTYPE in
+    apt-*)
         # TODO: use apt list
         if [ -n "$short" ] ; then
             docmd apt-cache search . | sed -e "s| .*||g"
@@ -6594,7 +6610,7 @@ epm_mark()
         epm_mark_showmanual "$@"
         ;;
     *)
-        fatal 'Unknown command $ epm repo $CMD'
+        fatal 'Unknown command $ epm mark $CMD'
         ;;
 esac
 
@@ -6660,6 +6676,15 @@ __epm_pack_run_handler()
     local url="$4"
     shift 4
     returntarname=''
+
+    if is_command sha256sum ; then
+        message "sha256sum:"
+        for i in $tarname ; do
+            message "    $(sha256sum $i) $(basename $i)"
+        done
+    else
+        message "sha256sum is missed, can't print sha256 for packages..."
+    fi
 
     local repackcode="$EPM_PACK_SCRIPTS_DIR/$packname.sh"
     [ -s "$repackcode" ] || return
@@ -6743,7 +6768,7 @@ __epm_pack()
     return 0
 }
 
-__list_all_app()
+__list_all_pack_rules()
 {
     cd $EPM_PACK_SCRIPTS_DIR || fatal
     for i in *.sh ; do
@@ -6752,15 +6777,6 @@ __list_all_app()
        echo "$name"
     done
     cd - >/dev/null
-}
-
-__epm_pack_list()
-{
-for i in $(__list_all_app) ; do
-    echo "$i"
-done
-exit
-
 }
 
 epm_pack_help()
@@ -6791,11 +6807,11 @@ case "$1" in
         return
         ;;
     --list)                        # HELPCMD: list all available receipts
-        __list_all_app
+        __list_all_pack_rules
         return
         ;;
     "")
-        fatal "Missed params. run with --help to get help."
+        fatal "Missed pack rule. run with --help to get help."
         ;;
 esac
 
@@ -6808,8 +6824,6 @@ esac
     local packversion="$3"
     local url=''
     shift 3
-
-    [ -n "$packname" ] || __epm_pack_list
 
     if is_url "$tarname"; then
         url="$tarname"
@@ -7359,6 +7373,82 @@ __epm_play_install_one()
         __epm_play_run "$prescription" --run "$@" || fatal "There was some error during run $prescription script."
     fi
 }
+__get_latest_package_version()
+{
+    local pkg="$1"
+    local ver
+
+    [ -n "$pkg" ] || return 1
+
+    ver="$(epm tool eget -q -O- "https://eepm.ru/app-versions/$pkg" 2>/dev/null)"
+
+    if [ -n "$ver" ] ; then
+        echo "$ver"
+        return 0
+    fi
+
+    return 1
+}
+
+__list_available_updates()
+{
+
+    local installed_table pkg app installed latest cmp header_printed updates_found line
+
+    installed_table="$(__get_installed_table)"
+
+    [ -n "$installed_table" ] || return 0
+
+    updates_found=0
+
+    while IFS= read -r line ; do
+
+        [ -n "$line" ] || continue
+        set -- $line
+        pkg="$1"
+        app="$2"
+
+        [ -n "$pkg" ] || continue
+        [ -n "$app" ] || continue
+
+        installed="$(epm print version for package "$pkg" 2>/dev/null | head -n1)"
+
+        [ -n "$installed" ] || continue
+
+        latest="$(__get_latest_package_version "$pkg")"
+
+        [ -n "$latest" ] || continue
+
+        cmp="$(epm print compare package version "$latest" "$installed" 2>/dev/null)"
+
+        [ "$cmp" = "1" ] || continue
+
+        updates_found=1
+
+        if [ -z "$quiet" ] && [ -z "$short" ] && [ -z "$header_printed" ] ; then
+            echo "Applications with available updates:"
+            header_printed=1
+        fi
+
+        if [ -n "$short" ] ; then
+            echo "$app"
+            continue
+        fi
+
+        if [ -n "$quiet" ] ; then
+            printf "%s %s %s\n" "$app" "$installed" "$latest"
+        else
+            printf "  %-25s %s -> %s\n" "$app" "$installed" "$latest"
+        fi
+
+    done <<EOF
+    $installed_table
+EOF
+
+    if [ "$updates_found" -eq 0 ] && [ -z "$short" ] && [ -z "$quiet" ] ; then
+        echo "All installed applications are up to date."
+    fi
+}
 
 
 __epm_play_install()
@@ -7562,6 +7652,10 @@ case "$1" in
         exit
         ;;
 
+    --list-updates)
+        __list_available_updates
+        exit
+        ;;
     --latest)
         shift
         export latest="true"
@@ -10715,6 +10809,8 @@ __prepare_source_package()
 __epm_repack_single()
 {
     local pkg="$1"
+    local packversion="$2"
+    local packrelease="$3"
     case $PKGFORMAT in
         rpm)
             if [ "$BASEDISTRNAME" = "alt" ] ; then
@@ -10725,12 +10821,12 @@ __epm_repack_single()
                     fatal_warning "Repacking already repacked package $pkg is uselessly."
                 fi
             fi
-            __epm_repack_to_rpm "$pkg" || return
+            __epm_repack_to_rpm "$pkg" "$packversion" "$packrelease" || return
             ;;
         deb)
             if __epm_have_repack_rule "$pkg" ; then
                 # we have repack rules only for rpm, so use rpm step in any case
-                __epm_repack_to_rpm "$pkg" || return
+                __epm_repack_to_rpm "$pkg" "$packversion" "$packrelease" || return
                 [ -n "$repacked_pkg" ] || return
                 __epm_repack_to_deb $repacked_pkg || return
             else
@@ -10749,8 +10845,20 @@ __epm_repack()
 {
     local pkg
     repacked_pkgs=''
+    local packversion="${EPM_REPACK_VERSION:-}"
+    local packrelease="${EPM_REPACK_RELEASE:-}"
+
+    if is_command sha256sum ; then
+        message "sha256sum:"
+        for i in $pkg_files ; do
+            message "    $(sha256sum $i) $(basename $i)"
+        done
+    else
+        message "sha256sum is missed, can't print sha256 for packages..."
+    fi
+
     for pkg in $* ; do
-        __epm_repack_single "$pkg" || fatal 'Error with $pkg repacking.'
+        __epm_repack_single "$pkg" "$packversion" "$packrelease" || fatal 'Error with $pkg repacking.'
         [ -n "$repacked_pkgs" ] && repacked_pkgs="$repacked_pkgs $repacked_pkg" || repacked_pkgs="$repacked_pkg"
     done
 }
@@ -10775,7 +10883,6 @@ epm_repack()
 
     [ -n "$pkg_names" ] && warning 'Can'\''t find $pkg_names files'
     [ -z "$pkg_files" ] && info "Empty repack list was skipped" && return 22
-
     if __epm_repack $pkg_files && [ -n "$repacked_pkgs" ] ; then
         if [ -n "$install" ] ; then
             epm install $repacked_pkgs
@@ -10919,6 +11026,8 @@ __assure_exists_rpmbuild()
 __epm_repack_to_rpm()
 {
     local pkg="$1"
+    local packversion="$2"
+    local packrelease="$3"
 
     # Note: install epm-repack for static (package based) dependencies
     assure_exists cpio
@@ -10958,12 +11067,12 @@ __epm_repack_to_rpm()
 
         alpkg=$(basename $pkg)
         # don't use abs package path: copy package to temp dir and use there
-        cp -l $verbose $pkg $tmpbuilddir/../$alpkg 2>/dev/null || cp $verbose $pkg $tmpbuilddir/../$alpkg || fatal
+        cp -l $verbose $abspkg $tmpbuilddir/../$alpkg 2>/dev/null || cp -s $verbose $abspkg $tmpbuilddir/../$alpkg 2>/dev/null || cp $verbose $abspkg $tmpbuilddir/../$alpkg || fatal
         [ -r "$pkg.eepm.yaml" ] && cp $verbose $pkg.eepm.yaml $tmpbuilddir/../$alpkg.eepm.yaml
 
         cd $tmpbuilddir/../ || fatal
         # fill alpkg and SUBGENERIC
-        __prepare_source_package "$(realpath $alpkg)"
+        __prepare_source_package "$(pwd)/$alpkg"
         # override abspkg
         abspkg="$(realpath $alpkg)"
         cd $tmpbuilddir/ || fatal
@@ -11014,6 +11123,13 @@ __epm_repack_to_rpm()
 
         # reassign package name (could be renamed in fix scripts)
         pkgname="$(grep "^Name: " $spec | sed -e "s|Name: ||g" | head -n1)"
+
+        if [ -n "$packversion" ]; then
+            sed -i "s|^Version: .*|Version: $packversion|" "$spec"
+        fi
+        if [ -n "$packrelease" ]; then
+            sed -i "s|^Release: .*|Release: $packrelease|" "$spec"
+        fi
 
         if [ -n "$EEPM_INTERNAL_PKGNAME" ] ; then
             if ! estrlist contains "$pkgname" "$EEPM_INTERNAL_PKGNAME" ; then
@@ -11707,8 +11823,7 @@ __subst_with_repo_url()
 
 __change_repo()
 {
-    local SHORT="$1"
-    local REPLTO="$2"
+    local REPLTO="$1"
     local NN
     epm --quiet repo list | grep -v "file:/" | while read nn ; do
         NN="$(__subst_with_repo_url "$nn" "$REPLTO")"
@@ -11722,31 +11837,31 @@ __epm_repochange_alt()
 {
     case "$1" in
         "--list")
-            echo "Possible targets: etersoft eterfund.org yandex basealt altlinux.org"
+            echo "Possible targets: etersoft datacenter.by truenetwork msu eterfund.org yandex basealt altlinux.org"
             ;;
         "etersoft")
-            __change_repo etersoft "//download.etersoft.ru/pub ALTLinux"
+            __change_repo "//download.etersoft.ru/pub ALTLinux"
             ;;
-        "datacenter")
-            __change_repo etersoft "//mirror.datacenter.by/pub ALTLinux"
+        "datacenter.by")
+            __change_repo "//mirror.datacenter.by/pub ALTLinux"
             ;;
         "truenetwork")
-            __change_repo etersoft "//mirror.truenetwork.ru altlinux"
+            __change_repo "//mirror.truenetwork.ru altlinux"
             ;;
         "msu")
-            __change_repo etersoft "//mirror.cs.msu.ru alt"
+            __change_repo "//mirror.cs.msu.ru alt"
             ;;
         "eterfund.org")
-            __change_repo eterfund.org "//mirror.eterfund.org/download.etersoft.ru/pub ALTLinux"
+            __change_repo "//mirror.eterfund.org/download.etersoft.ru/pub ALTLinux"
             ;;
         "yandex")
-            __change_repo mirror.yandex "//mirror.yandex.ru altlinux"
+            __change_repo "//mirror.yandex.ru altlinux"
             ;;
         "basealt")
-            __change_repo ftp.basealt "//ftp.basealt.ru/pub/distributions ALTLinux"
+            __change_repo "//ftp.basealt.ru/pub/distributions ALTLinux"
             ;;
         "altlinux.org")
-            __change_repo ftp.altlinux "//ftp.altlinux.org/pub/distributions ALTLinux"
+            __change_repo "//ftp.altlinux.org/pub/distributions ALTLinux"
             ;;
         *)
             fatal 'Unsupported change key $1'
@@ -14483,7 +14598,7 @@ epm_status_repacked()
     local pkg="$1"
 
     # dpkg package missing packager field
-    local repacked="$(epm print field Description for "$1" | grep -qi "alien" 2>/dev/null)"
+    local repacked="$(epm print field Description for "$1" 2>/dev/null | grep -qi "alien")"
     local packager="$(epm print field Packager for "$1" 2>/dev/null)"
 
     #is_installed $pkg || fatal "FIXME: implemented for installed packages as for now"
@@ -14517,7 +14632,7 @@ epm_status_thirdparty()
 
     #is_installed $pkg || fatal "FIXME: implemented for installed packages as for now"
     distribution="$(epm print field Distribution for "$pkg" 2>/dev/null )"
-    repacked="$(epm print field Description for "$1" | grep -qi "alien" 2>/dev/null)"
+    repacked="$(epm print field Description for "$1" 2>/dev/null | grep -qi "alien")"
     maintainer="$(epm print field Maintainer for "$pkg" 2>/dev/null)"
 
     case $BASEDISTRNAME in
@@ -14743,9 +14858,11 @@ __save_available_packages()
     [ -d /etc/bash_completion.d ] || return 0
 
     # HACK: too much time (5 minutes) on deb systems in a docker
-    [ $PMTYPE = "apt-dpkg" ] && return 0
+    # [ $PMTYPE = "apt-dpkg" ] && return 0
 
     info "Retrieving list of all available packages (for autocompletion) ..."
+    # can ask sudo later
+    set_sudo
     short=--short update=update epm_list_available | sort | sudorun tee $epm_vardir/available-packages >/dev/null
 }
 
@@ -19553,7 +19670,9 @@ epm_cachedir=/var/cache/eepm
 eget_ipfs_db=$epm_vardir/eget-ipfs-db.txt
 
 # load system wide config
-[ -f $CONFIGDIR/eepm.conf ] && . $CONFIGDIR/eepm.conf
+for i in $CONFIGDIR/eepm.conf $CONFIGDIR/conf.d/*.conf ; do
+    [ -f $CONFIGDIR/$i ] && . $CONFIGDIR/$i
+done
 
 
 case $PROGNAME in

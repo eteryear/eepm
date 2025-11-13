@@ -17,16 +17,25 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-has_repack_script()
+
+# args: pkgname/repackscript buildroot spec
+get_repack_script()
 {
-    local repackcode="$EPM_REPACK_SCRIPTS_DIR/$1.sh"
-    [ -s "$repackcode" ]
+    local repackcode="$1"
+    is_abs_path "$repackcode" || repackcode="$EPM_REPACK_SCRIPTS_DIR/$1.sh"
+    echo "$repackcode"
 }
 
-# args: pkgname buildroot spec
+# args: pkgname/repackscript buildroot spec
+has_repack_script()
+{
+    [ -s "$(get_repack_script "$1")" ]
+}
+
+# args: pkgname/repackscript buildroot spec
 __apply_fix_code()
 {
-    local repackcode="$EPM_REPACK_SCRIPTS_DIR/$1.sh"
+    local repackcode="$(get_repack_script "$1")"
     [ -s "$repackcode" ] || return 0
     [ -f "$repackcode.rpmnew" ] && warning 'There is .rpmnew file(s) in $EPM_REPACK_SCRIPTS_DIR dir. The pack script can be outdated.'
 
@@ -96,6 +105,8 @@ __assure_exists_rpmbuild()
 __epm_repack_to_rpm()
 {
     local pkg="$1"
+    local packversion="$2"
+    local packrelease="$3"
 
     # Note: install epm-repack for static (package based) dependencies
     assure_exists cpio
@@ -135,12 +146,12 @@ __epm_repack_to_rpm()
 
         alpkg=$(basename $pkg)
         # don't use abs package path: copy package to temp dir and use there
-        cp -l $verbose $pkg $tmpbuilddir/../$alpkg 2>/dev/null || cp $verbose $pkg $tmpbuilddir/../$alpkg || fatal
+        __epm_repack_copy $abspkg $tmpbuilddir/../$alpkg
         [ -r "$pkg.eepm.yaml" ] && cp $verbose $pkg.eepm.yaml $tmpbuilddir/../$alpkg.eepm.yaml
 
         cd $tmpbuilddir/../ || fatal
         # fill alpkg and SUBGENERIC
-        __prepare_source_package "$(realpath $alpkg)"
+        __prepare_source_package "$(pwd)/$alpkg"
         # override abspkg
         abspkg="$(realpath $alpkg)"
         cd $tmpbuilddir/ || fatal
@@ -180,10 +191,13 @@ __epm_repack_to_rpm()
         # run generic scripts and repack script for the pkg
         cd $buildroot || fatal
 
+        local repackscript="$pkgname"
+        [ -n "$EPM_REPACK_SCRIPT" ] && repackscript="$EPM_REPACK_SCRIPT"
+
         __apply_fix_code "generic"             $buildroot $spec $pkgname $abspkg $SUBGENERIC
         __apply_fix_code "generic-$SUBGENERIC" $buildroot $spec $pkgname $abspkg
-        __apply_fix_code $pkgname              $buildroot $spec $pkgname $abspkg
-        if ! has_repack_script $pkgname ; then
+        __apply_fix_code $repackscript         $buildroot $spec $pkgname $abspkg
+        if ! has_repack_script $repackscript ; then
             __apply_fix_code "generic-default" $buildroot $spec $pkgname $abspkg
         fi
         __apply_fix_code "generic-post"        $buildroot $spec $pkgname $abspkg
@@ -191,6 +205,13 @@ __epm_repack_to_rpm()
 
         # reassign package name (could be renamed in fix scripts)
         pkgname="$(grep "^Name: " $spec | sed -e "s|Name: ||g" | head -n1)"
+
+        if [ -n "$packversion" ]; then
+            sed -i "s|^Version: .*|Version: $packversion|" "$spec"
+        fi
+        if [ -n "$packrelease" ]; then
+            sed -i "s|^Release: .*|Release: $packrelease|" "$spec"
+        fi
 
         if [ -n "$EEPM_INTERNAL_PKGNAME" ] ; then
             if ! estrlist contains "$pkgname" "$EEPM_INTERNAL_PKGNAME" ; then
